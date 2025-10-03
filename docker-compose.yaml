@@ -1,0 +1,86 @@
+services:
+  nats:
+    image: nats:2.10
+    command: ["-js"]                   # JetStream optional; safe to keep
+    ports: ["4222:4222","8222:8222"]   # client / monitoring
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8222/varz"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-trading}
+      TZ: ${TZ:-Europe/Amsterdam}
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/00_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-trading}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  md-gateway:
+    build:
+      context: ./services/md-gateway
+    environment:
+      TZ: ${TZ:-Europe/Amsterdam}
+      NATS_URL: ${NATS_URL:-nats://nats:4222}
+      # cTrader creds/tokens (protobuf client)
+      CTRADER_CLIENT_ID: ${CTRADER_CLIENT_ID}
+      CTRADER_CLIENT_SECRET: ${CTRADER_CLIENT_SECRET}
+      CTRADER_ACCOUNT_ID: ${CTRADER_ACCOUNT_ID}
+      CTRADER_ACCESS_TOKEN: ${CTRADER_ACCESS_TOKEN}
+      # subjects
+      SUBJECT_TICKS: md.ticks.USOIL.cash
+      SUBJECT_BAR_1M: md.bar.1m.USOIL.cash
+    depends_on:
+      - nats
+    restart: unless-stopped
+
+  strategy:
+    build:
+      context: ./services/strategy
+    environment:
+      TZ: ${TZ:-Europe/Amsterdam}
+      NATS_URL: ${NATS_URL:-nats://nats:4222}
+      SUBJECT_BAR_1M: md.bar.1m.USOIL.cash
+      SUBJECT_ORDERS_NEW: orders.new
+      # risk guard params (example; tune later)
+      MAX_POS_QTY: ${MAX_POS_QTY:-0.02}
+      MAX_RISK_EUR: ${MAX_RISK_EUR:-50}
+    depends_on:
+      - nats
+    restart: unless-stopped
+
+  order-router:
+    build:
+      context: ./services/order-router
+    environment:
+      TZ: ${TZ:-Europe/Amsterdam}
+      NATS_URL: ${NATS_URL:-nats://nats:4222}
+      SUBJECT_ORDERS_NEW: orders.new
+      SUBJECT_ORDERS_UPD: orders.upd
+      SUBJECT_FILLS_NEW:  fills.new
+      # postgres dsn for persistence
+      POSTGRES_DSN: postgres://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app_pw}@postgres:5432/${POSTGRES_DB:-trading}
+      # cTrader creds/tokens (protobuf client)
+      CTRADER_CLIENT_ID: ${CTRADER_CLIENT_ID}
+      CTRADER_CLIENT_SECRET: ${CTRADER_CLIENT_SECRET}
+      CTRADER_ACCOUNT_ID: ${CTRADER_ACCOUNT_ID}
+      CTRADER_ACCESS_TOKEN: ${CTRADER_ACCESS_TOKEN}
+    depends_on:
+      - nats
+      - postgres
+    restart: unless-stopped
+
+volumes:
+  pgdata:
