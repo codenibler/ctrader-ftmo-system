@@ -7,7 +7,10 @@ from collections import deque
 import pandas as pd
 
 if TYPE_CHECKING:  # pragma: no cover - typing helper only
-    from indicators.legs import Leg, SwingPivot
+    from indicators.swings import SwingPivot
+    from typing import Any
+
+    Leg = Any
 
 
 @dataclass

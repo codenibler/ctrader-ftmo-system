@@ -1,1 +1,4 @@
 /Legacy_strategy
+
+*.parquet
+*.csv
