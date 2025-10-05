@@ -19,7 +19,7 @@ except ImportError:
     from swings import build_all_zigzag_levels  # type: ignore
 
 if TYPE_CHECKING:  # pragma: no cover - typing helper only
-    from ..runtime.strategy_state import StrategyState
+    from ...runtime.strategy_state import StrategyState
 
 
 @dataclass

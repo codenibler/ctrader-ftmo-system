@@ -22,7 +22,7 @@ except ImportError:
     from swings import parse_month  # type: ignore
 
 if TYPE_CHECKING:  # pragma: no cover - typing helper only
-    from ..runtime.strategy_state import StrategyState
+    from ...runtime.strategy_state import StrategyState
 
 # --- LVN tuning defaults (mirrors legacy lvn_scan.py) ---
 

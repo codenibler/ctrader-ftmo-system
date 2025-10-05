@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Iterable
 
 # Import from sibling module using project-relative path for script execution support.
-from runtime.strategy_state import Candle, StrategyState
+from ...runtime.strategy_state import Candle, StrategyState  # type: ignore[attr-defined]
 
 
 DEFAULT_EMA_PERIODS: tuple[int, ...] = (9, 20)
