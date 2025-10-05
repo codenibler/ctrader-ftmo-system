@@ -7,8 +7,13 @@ from typing import Dict, List, Sequence
 import math
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
-from plotly import offline as pyo
+
+try:  # Plotly is only required for visualization helpers.
+    import plotly.graph_objects as go
+    from plotly import offline as pyo
+except ImportError:  # pragma: no cover - optional dependency
+    go = None  # type: ignore
+    pyo = None  # type: ignore
 
 def _progress(label: str, current: int, total: int, interval: int | None = None) -> None:
     if total <= 0:
@@ -318,6 +323,8 @@ def plot_swings(
     out_path: Path,
     label: str | None = None,
 ) -> None:
+    if go is None or pyo is None:
+        raise ImportError("Plotly is required for plotting swings but is not installed.")
     fig = go.Figure()
 
     if not df.empty:

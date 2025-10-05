@@ -7,10 +7,16 @@ from collections import deque
 import pandas as pd
 
 if TYPE_CHECKING:  # pragma: no cover - typing helper only
-    from indicators.swings import SwingPivot
+    try:
+        from ..indicators.swings import SwingPivot  # type: ignore
+    except ImportError:  # legacy module optional
+        SwingPivot = object  # type: ignore
+    from ..indicators.generate_swing_legs_from_parquet import Leg
+else:  # pragma: no cover - runtime fallback types
     from typing import Any
 
-    Leg = Any
+    SwingPivot = Any  # type: ignore
+    Leg = Any  # type: ignore
 
 
 @dataclass
