@@ -9,7 +9,7 @@ from typing import Iterable
 import pandas as pd
 
 try:
-    from .swings_extract import (
+    from .extract import (
         PCT_BY_TIMEFRAME,
         confirming_zigzag,
         determine_pct,
@@ -19,7 +19,7 @@ except ImportError:
     CURRENT_DIR = Path(__file__).resolve().parent
     if str(CURRENT_DIR) not in sys.path:
         sys.path.insert(0, str(CURRENT_DIR))
-    from swings_extract import (
+    from extract import (
         PCT_BY_TIMEFRAME,
         confirming_zigzag,
         determine_pct,

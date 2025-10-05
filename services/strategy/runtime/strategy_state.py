@@ -1,22 +1,24 @@
 """State containers for streaming LVN strategy."""
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Deque, Dict, List, Optional
-from collections import deque
+
 import pandas as pd
 
 if TYPE_CHECKING:  # pragma: no cover - typing helper only
-    try:
-        from ..indicators.swings import SwingPivot  # type: ignore
-    except ImportError:  # legacy module optional
-        SwingPivot = object  # type: ignore
-    from ..indicators.generate_swing_legs_from_parquet import Leg
+    from typing import Any
+
+    SwingPivot = Any  # ZigZag pivot placeholder for type hints
+    from ..indicators.legs import Leg
+    from ..indicators.lvns import LowVolumeNode
 else:  # pragma: no cover - runtime fallback types
     from typing import Any
 
     SwingPivot = Any  # type: ignore
     Leg = Any  # type: ignore
+    LowVolumeNode = Any  # type: ignore
 
 
 @dataclass
@@ -57,7 +59,7 @@ class StrategyState:
     candles: Deque[Candle] = field(default_factory=deque)
     pivots: Deque["SwingPivot"] = field(default_factory=deque)
     legs: Deque["Leg"] = field(default_factory=deque)
-    pending_lvns: List[dict] = field(default_factory=list)
+    pending_lvns: List[LowVolumeNode] = field(default_factory=list)
 
     def ensure_ema(self, period: int) -> EMAState:
         if period not in self.ema:

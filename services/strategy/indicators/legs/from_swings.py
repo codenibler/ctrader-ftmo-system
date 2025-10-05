@@ -9,13 +9,14 @@ from typing import Iterable, List, Sequence, TYPE_CHECKING
 import pandas as pd
 
 try:
-    from .find_all_zigzag_levels import build_all_zigzag_levels
+    from ..swings import build_all_zigzag_levels
 except ImportError:
     import sys
     CURRENT_DIR = Path(__file__).resolve().parent
-    if str(CURRENT_DIR) not in sys.path:
-        sys.path.insert(0, str(CURRENT_DIR))
-    from find_all_zigzag_levels import build_all_zigzag_levels
+    STRATEGY_ROOT = CURRENT_DIR.parent
+    if str(STRATEGY_ROOT) not in sys.path:
+        sys.path.insert(0, str(STRATEGY_ROOT))
+    from swings import build_all_zigzag_levels  # type: ignore
 
 if TYPE_CHECKING:  # pragma: no cover - typing helper only
     from ..runtime.strategy_state import StrategyState

@@ -4,10 +4,18 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import sys
 from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
+
+
+if __package__ is None or __package__ == "":  # support direct execution
+    CURRENT_DIR = Path(__file__).resolve().parent
+    STRATEGY_ROOT = CURRENT_DIR.parent
+    if str(STRATEGY_ROOT) not in sys.path:
+        sys.path.insert(0, str(STRATEGY_ROOT))
 
 from runtime.candle_pipeline import StrategyPipeline
 from runtime.parquet_ingestion import ParquetCandleSource

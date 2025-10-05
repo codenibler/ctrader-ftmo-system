@@ -16,8 +16,17 @@ Notes:
 """
 
 import argparse
+import sys
 from pathlib import Path
+
 import pandas as pd
+
+
+if __package__ is None or __package__ == "":
+    CURRENT_DIR = Path(__file__).resolve().parent
+    STRATEGY_ROOT = CURRENT_DIR.parent
+    if str(STRATEGY_ROOT) not in sys.path:
+        sys.path.insert(0, str(STRATEGY_ROOT))
 
 def parse_args():
     p = argparse.ArgumentParser()
