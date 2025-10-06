@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 
-LONG_BASELINE_SPREAD = 0.02
+LONG_BASELINE_SPREAD = 0.022
 
 
 def compute_spread(bid: Optional[float], ask: Optional[float]) -> float:

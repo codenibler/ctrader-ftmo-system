@@ -1,4 +1,4 @@
-#!/Users/angel/Projects/ctrader-ftmo-system/.venv-arm64/bin/python
+#!/Users/angel/Projects/Current/ctrader-ftmo-system/.venv-arm64/bin/python
 import sys
 from numpy._configtool import main
 if __name__ == '__main__':

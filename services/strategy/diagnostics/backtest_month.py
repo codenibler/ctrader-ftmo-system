@@ -195,3 +195,21 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+"""
+python3 services/strategy/diagnostics/backtest_from_structures.py \    
+       --parquet services/strategy/CL_1m.parquet \
+       --month 2025_01 \
+       --symbol CL \
+       --swings diagnostics/january_2025/CL_swings_2025_01.csv \
+       --legs diagnostics/january_2025/CL_legs_2025_01.csv \
+       --lvns diagnostics/january_2025/CL_lvns_2025_01.csv \
+       --spread 0.02 \
+       --starting-equity 10000 \
+       --trades-csv diagnostics/january_2025/trades_from_structures.csv \
+       --trades-html diagnostics/january_2025/trades_from_structures.html \
+       --chart-html diagnostics/january_2025/trades_chart.html \
+       --equity-html diagnostics/january_2025/equity_curve.html
+
+"""

@@ -8,9 +8,17 @@ from typing import Literal
 
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from datetime import time
 
 
 Direction = Literal["uptrend", "downtrend"]
+
+FRIDAY = 4
+FRIDAY_ORDER_CUTOFF = time(16, 50)
+SESSION_START = time(3, 0)
+SESSION_END = time(16, 0)
+FRIDAY_SESSION_CLOSE = time(16, 59)
 
 
 @dataclass
@@ -112,6 +120,12 @@ def run_backtest(
         if entry_time is None:
             continue
 
+        local_time = entry_time.time()
+        if not (SESSION_START <= local_time <= SESSION_END):
+            continue
+        if entry_time.weekday() == FRIDAY and local_time > FRIDAY_ORDER_CUTOFF:
+            continue
+
         swings_future = swings[swings["pivot_time"] > entry_time]
         target_pivot = swings_future[swings_future["structure"].str.upper() == structure_target]
         if target_pivot.empty:
@@ -121,7 +135,16 @@ def run_backtest(
         target_price = float(target_pivot["pivot_price"])
 
         after_entry = future_prices[future_prices["timestamp"] >= entry_time]
-        window = after_entry[after_entry["timestamp"] <= target_time]
+        cutoff_time = target_time
+
+        forced_rows = after_entry[after_entry["timestamp"].dt.weekday.eq(FRIDAY) & (after_entry["timestamp"].dt.time >= FRIDAY_SESSION_CLOSE)]
+        forced_exit_time = forced_rows.iloc[0]["timestamp"] if not forced_rows.empty else None
+        forced_exit_price = float(forced_rows.iloc[0]["close"]) if forced_exit_time is not None else None
+
+        if forced_exit_time is not None and forced_exit_time < cutoff_time:
+            cutoff_time = forced_exit_time
+
+        window = after_entry[after_entry["timestamp"] <= cutoff_time]
         if window.empty:
             window = after_entry
 
@@ -132,21 +155,18 @@ def run_backtest(
             stop_hit_time = first_timestamp_where(window, window["high"] >= stop_price)
             target_hit_time = first_timestamp_where(window, window["low"] <= target_price)
 
-        outcome: str
-        exit_time: pd.Timestamp
-        exit_price: float
+        events = []
+        if stop_hit_time is not None:
+            events.append((stop_hit_time, "stop", stop_price))
+        if target_hit_time is not None:
+            events.append((target_hit_time, "target", target_price))
+        if forced_exit_time is not None:
+            events.append((forced_exit_time, "close", forced_exit_price if forced_exit_price is not None else target_price))
 
-        if stop_hit_time is not None and (target_hit_time is None or stop_hit_time <= target_hit_time):
-            outcome = "stop"
-            exit_time = stop_hit_time
-            exit_price = stop_price
-        elif target_hit_time is not None:
-            outcome = "target"
-            exit_time = target_hit_time
-            exit_price = target_price
-        else:
-            # neither stop nor target hit within data window; skip trade
+        if not events:
             continue
+
+        exit_time, outcome, exit_price = min(events, key=lambda item: item[0])
 
         direction_mult = 1.0 if direction == "uptrend" else -1.0
         pnl = (exit_price - entry_price) * direction_mult
@@ -189,7 +209,45 @@ def trades_to_dataframe(trades: list[Trade]) -> pd.DataFrame:
     ])
 
 
-def write_trade_chart(prices: pd.DataFrame, trades: pd.DataFrame, output_path: Path, title: str) -> None:
+def write_equity_chart(trades: pd.DataFrame, output_path: Path) -> None:
+    if trades.empty:
+        raise ValueError("No trades available to build equity curve.")
+
+    equity_df = trades[["equity_after"]].copy().reset_index(drop=True)
+    equity_df["trade_number"] = equity_df.index + 1
+
+    fig = go.Figure(
+        go.Scatter(
+            x=equity_df["trade_number"],
+            y=equity_df["equity_after"],
+            mode="lines+markers",
+            line=dict(color="#1f77b4", width=2),
+            marker=dict(size=5, color="#1f77b4"),
+            name="Equity",
+            hovertemplate="Trade #%{x}<br>Equity: %{y:.2f}<extra></extra>",
+        )
+    )
+
+    fig.update_layout(
+        title="Equity Curve",
+        template="plotly_white",
+        xaxis_title="Trade Number",
+        yaxis_title="Equity",
+        hovermode="x unified",
+    )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.write_html(str(output_path), include_plotlyjs="cdn", auto_open=False)
+    return fig
+
+
+def write_trade_chart(
+    prices: pd.DataFrame,
+    trades: pd.DataFrame,
+    output_path: Path,
+    title: str,
+    starting_equity: float,
+) -> go.Figure:
     if prices.empty:
         raise ValueError("price DataFrame is empty; cannot plot chart")
 
@@ -198,7 +256,14 @@ def write_trade_chart(prices: pd.DataFrame, trades: pd.DataFrame, output_path: P
     plot_df = prices.sort_values("timestamp").copy()
     plot_df["plot_ts"] = plot_df["timestamp"].dt.tz_convert(None)
 
-    fig = go.Figure()
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.04,
+        row_heights=[0.7, 0.3],
+        subplot_titles=(title, "Equity Curve"),
+    )
     fig.add_trace(
         go.Candlestick(
             x=plot_df["plot_ts"],
@@ -207,8 +272,12 @@ def write_trade_chart(prices: pd.DataFrame, trades: pd.DataFrame, output_path: P
             low=plot_df["low"],
             close=plot_df["close"],
             name="Price",
-        )
+        ),
+        row=1,
+        col=1,
     )
+
+    equity_curve = pd.DataFrame(columns=["timestamp", "equity"])
 
     if not trades.empty:
         trades = trades.copy()
@@ -233,7 +302,9 @@ def write_trade_chart(prices: pd.DataFrame, trades: pd.DataFrame, output_path: P
                     "Dir: %{customdata[2]}<br>Price: %{y:.4f}<br>Stop: %{customdata[3]:.4f}<br>"
                     "Time: %{x|%Y-%m-%d %H:%M:%S}"
                 ),
-            )
+            ),
+            row=1,
+            col=1,
         )
 
         exit_color = trades["outcome"].map({"target": "#1f77b4", "stop": "#ff7f0e"}).fillna("#7f7f7f")
@@ -249,20 +320,50 @@ def write_trade_chart(prices: pd.DataFrame, trades: pd.DataFrame, output_path: P
                     "Exit #%{customdata[0]} (%{customdata[1]})<br>Price: %{y:.4f}<br>PnL: %{customdata[2]:.2f}<br>"
                     "Time: %{x|%Y-%m-%d %H:%M:%S}"
                 ),
+            ),
+            row=1,
+            col=1,
+        )
+
+        equity_points = trades.sort_values("exit_time").copy()
+        equity_curve = pd.DataFrame(columns=["timestamp", "equity"])
+        if not equity_points.empty:
+            equity_curve = pd.DataFrame(
+                {
+                    "timestamp": pd.to_datetime(equity_points["exit_time"], utc=True),
+                    "equity": equity_points["equity_after"],
+                }
             )
+
+    if not equity_curve.empty:
+        equity_curve = equity_curve.sort_values("timestamp")
+        equity_curve["plot_ts"] = equity_curve["timestamp"].dt.tz_convert(None)
+        fig.add_trace(
+            go.Scatter(
+                x=equity_curve["plot_ts"],
+                y=equity_curve["equity"],
+                mode="lines+markers",
+                line=dict(color="#1f77b4", width=2),
+                marker=dict(size=6, color="#1f77b4"),
+                name="Equity",
+                hovertemplate="Equity: %{y:.2f}<br>Time: %{x|%Y-%m-%d %H:%M:%S}<extra></extra>",
+            ),
+            row=2,
+            col=1,
         )
 
     fig.update_layout(
-        title=title,
         template="plotly_white",
         hovermode="x unified",
-        xaxis_title="Time",
-        yaxis_title="Price",
         xaxis_rangeslider_visible=False,
     )
+    fig.update_xaxes(title_text="Time", row=2, col=1)
+    fig.update_yaxes(title_text="Price", row=1, col=1)
+    fig.update_yaxes(title_text="Equity", row=2, col=1)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.write_html(str(output_path), include_plotlyjs="cdn", auto_open=False)
+    return fig
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Lightweight LVN backtest using exported structures.")
@@ -276,7 +377,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--starting-equity", type=float, default=10_000.0, help="Starting equity for cumulative PnL")
     parser.add_argument("--trades-csv", type=Path, help="Optional path to write trade results")
     parser.add_argument("--trades-html", type=Path, help="Optional path to write trade table as HTML")
-    parser.add_argument("--chart-html", type=Path, help="Optional path to write price chart with trades")
+    parser.add_argument("--chart-html", type=Path, help="Optional path to write price & equity chart")
+    parser.add_argument("--equity-html", type=Path, help="Optional path to write standalone equity curve")
     return parser.parse_args()
 
 
@@ -316,9 +418,37 @@ def main() -> None:
 
     if args.chart_html:
         args.chart_html.parent.mkdir(parents=True, exist_ok=True)
-        write_trade_chart(prices, trades_df, args.chart_html, title=f"{args.symbol} Trades ({args.month})")
+        fig_trade = write_trade_chart(
+            prices,
+            trades_df,
+            args.chart_html,
+            title=f"{args.symbol} Trades ({args.month})",
+            starting_equity=args.starting_equity,
+        )
         print(f"Chart written -> {args.chart_html}")
+        png_chart = args.chart_html.with_suffix('.png')
+        fig_trade.write_image(str(png_chart), engine='kaleido')
+        print(f"Chart PNG written -> {png_chart}")
+
+    if args.equity_html:
+        args.equity_html.parent.mkdir(parents=True, exist_ok=True)
+        fig_equity = write_equity_chart(trades_df, args.equity_html)
+        print(f"Equity curve written -> {args.equity_html}")
+        png_equity = args.equity_html.with_suffix('.png')
+        fig_equity.write_image(str(png_equity), engine='kaleido')
+        print(f"Equity PNG written -> {png_equity}")
 
 
 if __name__ == "__main__":
     main()
+
+def write_trade_chart_png(prices: pd.DataFrame, trades: pd.DataFrame, output_path: Path, title: str, starting_equity: float) -> None:
+    write_trade_chart(prices, trades, output_path, title, starting_equity)
+    fig = go.Figure(go.Scatter())  # placeholder to load HTML
+    fig.write_image(str(output_path.with_suffix(".png")), engine="kaleido")
+
+
+def write_equity_chart_png(trades: pd.DataFrame, output_path: Path) -> None:
+    write_equity_chart(trades, output_path)
+    fig = go.Figure(go.Scatter())
+    fig.write_image(str(output_path.with_suffix(".png")), engine="kaleido")
