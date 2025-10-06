@@ -21,6 +21,7 @@ class PendingOrder:
     lvn_price: float
     lvn_rank: int
     spread: float
+    contract_value: float
     created_at: pd.Timestamp
     status: OrderStatus = "pending"
     filled_at: Optional[pd.Timestamp] = None

@@ -6,10 +6,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from datetime import time
+
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import time
+
+from ..risk import contract_value_from_price
 
 
 Direction = Literal["uptrend", "downtrend"]
@@ -32,6 +35,7 @@ class Trade:
     exit_time: pd.Timestamp
     exit_price: float
     outcome: str
+    contract_value: float
     pnl: float
     equity_after: float
 
@@ -168,8 +172,12 @@ def run_backtest(
 
         exit_time, outcome, exit_price = min(events, key=lambda item: item[0])
 
+        if entry_price <= 0:
+            continue
+        contract_value = contract_value_from_price(entry_price)
         direction_mult = 1.0 if direction == "uptrend" else -1.0
-        pnl = (exit_price - entry_price) * direction_mult
+        price_change = (exit_price - entry_price) / entry_price
+        pnl = price_change * direction_mult * contract_value
         equity += pnl
         trades.append(
             Trade(
@@ -182,6 +190,7 @@ def run_backtest(
                 exit_time=exit_time,
                 exit_price=exit_price,
                 outcome=outcome,
+                contract_value=contract_value,
                 pnl=pnl,
                 equity_after=equity,
             )
@@ -202,6 +211,7 @@ def trades_to_dataframe(trades: list[Trade]) -> pd.DataFrame:
             "exit_time": trade.exit_time,
             "exit_price": trade.exit_price,
             "outcome": trade.outcome,
+            "contract_value": trade.contract_value,
             "pnl": trade.pnl,
             "equity_after": trade.equity_after,
         }

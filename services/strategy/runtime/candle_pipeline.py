@@ -18,6 +18,7 @@ from ..indicators import (
     legs_to_frame,
     update_emas,
 )
+from ..risk import contract_value_from_price
 from .orders import PendingOrder
 from .strategy_state import Candle, StrategyState
 
@@ -152,6 +153,9 @@ class StrategyPipeline:
         else:
             entry_price = float(node.lvn_price) + spread
             stop_price = float(leg.start_price)
+        if entry_price <= 0:
+            return
+        contract_value = contract_value_from_price(entry_price)
         order = PendingOrder(
             order_id=uuid.uuid4().hex,
             leg_key=leg_key,
@@ -161,6 +165,7 @@ class StrategyPipeline:
             lvn_price=float(node.lvn_price),
             lvn_rank=int(node.lvn_rank),
             spread=spread,
+            contract_value=contract_value,
             created_at=pd.Timestamp(node.start_ts),
         )
         self.state.orders[order.order_id] = order
@@ -200,7 +205,11 @@ class StrategyPipeline:
 
     def _close_order(self, order: PendingOrder, *, price: float, time: pd.Timestamp, outcome: str) -> None:
         direction_mult = 1.0 if order.is_long else -1.0
-        pnl = (price - order.entry_price) * direction_mult
+        if order.entry_price > 0:
+            price_change = (price - order.entry_price) / order.entry_price
+        else:
+            price_change = 0.0
+        pnl = price_change * direction_mult * order.contract_value
         order.status = "closed"
         order.exit_time = time
         order.exit_price = price
@@ -226,6 +235,7 @@ class StrategyPipeline:
                     "exit_price": order.exit_price,
                     "exit_time": order.exit_time,
                     "outcome": order.outcome,
+                    "contract_value": order.contract_value,
                     "pnl": order.pnl,
                     "equity_after": order.equity_after,
                     "leg_start": order.leg_key[0],
