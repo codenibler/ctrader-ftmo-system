@@ -27,12 +27,12 @@ if TYPE_CHECKING:  # pragma: no cover - typing helper only
 # --- LVN tuning defaults (mirrors legacy lvn_scan.py) ---
 
 EDGE_BIN_RATIO = 0.15
-PROMINENCE_RATIO = 0.50
+PROMINENCE_RATIO = 0.60
 MIN_PCT_TOTAL_VOL = 0.005
-VALUE_AREA_TARGET = 0.70
-MAX_LVNS_PER_LEG = 3
-SMOOTH_WINDOW = 3
-MIN_LEG_BARS = 10
+VALUE_AREA_TARGET = 0.90
+MAX_LVNS_PER_LEG = 5
+SMOOTH_WINDOW = 1
+MIN_LEG_BARS = 5
 
 
 @dataclass

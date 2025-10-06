@@ -3,8 +3,14 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
 
 import pandas as pd
+
+if __package__ is None or __package__ == '':
+    repo_root = Path(__file__).resolve().parents[3]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
 
 from services.strategy.indicators.swings.find_all_zigzag_levels import build_all_zigzag_levels, parse_month
 from services.strategy.indicators.legs.from_swings import extract_legs, legs_to_frame
