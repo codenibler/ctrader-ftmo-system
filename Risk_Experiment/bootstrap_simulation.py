@@ -14,16 +14,16 @@ from tqdm import tqdm
 
 
 DEFAULT_F_VALUES: Sequence[float] = (
-    0.0000010,
-    0.0000015,
-    0.0000020
+    0.0015, 
+    0.002,
+    0.0025,
 )
 
 DEFAULT_BLOCK_SIZE = 4
 DEFAULT_NUM_PATHS = 10_000
 DEFAULT_OUTPUT = Path("Risk_Experiment") / "bootstrap_results.csv"
-DEFAULT_TRADES_PER_MONTH = 550
-DEFAULT_MONTHS = 3
+DEFAULT_TRADES_PER_MONTH = 510
+DEFAULT_MONTHS = 6
 R_VALUES_PATH = Path("Risk_Experiment") / "R_Values.csv"
 
 

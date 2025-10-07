@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-DEFAULT_RISK_PCT: float = 0.00025  # % of equity risked per trade. 
+DEFAULT_RISK_PCT: float = 0.002 # % of equity risked per trade. 
 DEFAULT_CONTRACT_UNITS: float = 100.0  # CL micro contract is 100 barrels
 
 
