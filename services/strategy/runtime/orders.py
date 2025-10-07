@@ -15,6 +15,7 @@ OrderOutcome = Literal["target", "stop", "cancelled"]
 class PendingOrder:
     order_id: str
     leg_key: Tuple[pd.Timestamp, pd.Timestamp]
+    leg_id: int
     direction: Direction
     entry_price: float
     stop_price: float
@@ -23,6 +24,7 @@ class PendingOrder:
     spread: float
     contract_value: float
     created_at: pd.Timestamp
+    size: float = 0.0
     status: OrderStatus = "pending"
     filled_at: Optional[pd.Timestamp] = None
     exit_time: Optional[pd.Timestamp] = None

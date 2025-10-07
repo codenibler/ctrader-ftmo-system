@@ -60,6 +60,7 @@ class StrategyState:
     pivots: Deque["SwingPivot"] = field(default_factory=deque)
     legs: Deque["Leg"] = field(default_factory=deque)
     pending_lvns: List[LowVolumeNode] = field(default_factory=list)
+    debug_logs: List[dict] = field(default_factory=list)
 
     def ensure_ema(self, period: int) -> EMAState:
         if period not in self.ema:
@@ -71,6 +72,9 @@ class StrategyState:
 
     def push_candle(self, candle: Candle) -> None:
         self.candles.append(candle)
+
+    def record_debug(self, event: dict) -> None:
+        self.debug_logs.append(event)
 
 
 __all__ = ["Candle", "EMAState", "StrategyState"]

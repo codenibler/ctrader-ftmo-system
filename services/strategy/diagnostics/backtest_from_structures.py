@@ -12,7 +12,12 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from ..risk import contract_value_from_price
+from ..risk import (
+    DEFAULT_CONTRACT_UNITS,
+    DEFAULT_RISK_PCT,
+    compute_position_size,
+    contract_value_from_price,
+)
 
 
 Direction = Literal["uptrend", "downtrend"]
@@ -36,6 +41,7 @@ class Trade:
     exit_price: float
     outcome: str
     contract_value: float
+    size: float
     pnl: float
     equity_after: float
 
@@ -75,9 +81,11 @@ def run_backtest(
     *,
     spread: float,
     starting_equity: float,
-) -> tuple[list[Trade], float]:
+    risk_pct: float = DEFAULT_RISK_PCT,
+) -> tuple[list[Trade], float, list[dict[str, object]]]:
     trades: list[Trade] = []
     equity = starting_equity
+    geometry_debug: list[dict[str, object]] = []
 
     swings = swings.copy()
     swings["pivot_time"] = pd.to_datetime(swings["pivot_time"], utc=True)
@@ -106,10 +114,38 @@ def run_backtest(
             entry_price = float(node["lvn_price"]) - spread
             stop_price = float(leg["start_price"])
             structure_target = "HH"
+            if stop_price >= entry_price:
+                geometry_debug.append(
+                    {
+                        "stage": "order_creation",
+                        "leg_id": leg_id,
+                        "direction": direction,
+                        "entry_price": entry_price,
+                        "stop_price": stop_price,
+                        "target_price": float(leg.get("end_price", float("nan"))),
+                        "message": "Long entry is at/below stop; trade skipped.",
+                        "logged_at": pd.Timestamp.utcnow(),
+                    }
+                )
+                continue
         else:
             entry_price = float(node["lvn_price"]) + spread
             stop_price = float(leg["start_price"])
             structure_target = "LL"
+            if stop_price <= entry_price:
+                geometry_debug.append(
+                    {
+                        "stage": "order_creation",
+                        "leg_id": leg_id,
+                        "direction": direction,
+                        "entry_price": entry_price,
+                        "stop_price": stop_price,
+                        "target_price": float(leg.get("end_price", float("nan"))),
+                        "message": "Short entry is at/above stop; trade skipped.",
+                        "logged_at": pd.Timestamp.utcnow(),
+                    }
+                )
+                continue
 
         start_ts = pd.Timestamp(node["end_ts"])  # leg completed at end_ts
         future_prices = prices[prices["timestamp"] >= start_ts]
@@ -138,8 +174,46 @@ def run_backtest(
         target_time = pd.Timestamp(target_pivot["pivot_time"])
         target_price = float(target_pivot["pivot_price"])
 
+        # Discard targets that are not in the profitable direction so the stop remains authoritative.
+        price_is_favorable = (
+            (direction == "uptrend" and target_price > entry_price)
+            or (direction == "downtrend" and target_price < entry_price)
+        )
+        if not price_is_favorable:
+            target_time = None
+            target_price = None
+        else:
+            if direction == "uptrend":
+                if not (stop_price < entry_price < target_price):
+                    geometry_debug.append(
+                        {
+                            "stage": "target_check",
+                            "leg_id": leg_id,
+                            "direction": direction,
+                            "entry_price": entry_price,
+                            "stop_price": stop_price,
+                            "target_price": target_price,
+                            "message": "Long target geometry invalid; proceeding with stop logic.",
+                            "logged_at": pd.Timestamp.utcnow(),
+                        }
+                    )
+            else:
+                if not (stop_price > entry_price > target_price):
+                    geometry_debug.append(
+                        {
+                            "stage": "target_check",
+                            "leg_id": leg_id,
+                            "direction": direction,
+                            "entry_price": entry_price,
+                            "stop_price": stop_price,
+                            "target_price": target_price,
+                            "message": "Short target geometry invalid; proceeding with stop logic.",
+                            "logged_at": pd.Timestamp.utcnow(),
+                        }
+                    )
+
         after_entry = future_prices[future_prices["timestamp"] >= entry_time]
-        cutoff_time = target_time
+        cutoff_time = target_time if target_time is not None else after_entry.iloc[-1]["timestamp"]
 
         forced_rows = after_entry[after_entry["timestamp"].dt.weekday.eq(FRIDAY) & (after_entry["timestamp"].dt.time >= FRIDAY_SESSION_CLOSE)]
         forced_exit_time = forced_rows.iloc[0]["timestamp"] if not forced_rows.empty else None
@@ -154,10 +228,18 @@ def run_backtest(
 
         if direction == "uptrend":
             stop_hit_time = first_timestamp_where(window, window["low"] <= stop_price)
-            target_hit_time = first_timestamp_where(window, window["high"] >= target_price)
+            target_hit_time = (
+                first_timestamp_where(window, window["high"] >= target_price)
+                if target_price is not None
+                else None
+            )
         else:
             stop_hit_time = first_timestamp_where(window, window["high"] >= stop_price)
-            target_hit_time = first_timestamp_where(window, window["low"] <= target_price)
+            target_hit_time = (
+                first_timestamp_where(window, window["low"] <= target_price)
+                if target_price is not None
+                else None
+            )
 
         events = []
         if stop_hit_time is not None:
@@ -175,9 +257,18 @@ def run_backtest(
         if entry_price <= 0:
             continue
         contract_value = contract_value_from_price(entry_price)
+        size = compute_position_size(
+            equity=equity,
+            entry_price=entry_price,
+            stop_price=stop_price,
+            risk_pct=risk_pct,
+            contract_units=DEFAULT_CONTRACT_UNITS,
+        )
+        if size <= 0:
+            continue
         direction_mult = 1.0 if direction == "uptrend" else -1.0
         price_change = (exit_price - entry_price) / entry_price
-        pnl = price_change * direction_mult * contract_value
+        pnl = price_change * direction_mult * contract_value * size
         equity += pnl
         trades.append(
             Trade(
@@ -191,12 +282,13 @@ def run_backtest(
                 exit_price=exit_price,
                 outcome=outcome,
                 contract_value=contract_value,
+                size=size,
                 pnl=pnl,
                 equity_after=equity,
             )
         )
 
-    return trades, equity
+    return trades, equity, geometry_debug
 
 
 def trades_to_dataframe(trades: list[Trade]) -> pd.DataFrame:
@@ -212,6 +304,7 @@ def trades_to_dataframe(trades: list[Trade]) -> pd.DataFrame:
             "exit_price": trade.exit_price,
             "outcome": trade.outcome,
             "contract_value": trade.contract_value,
+            "size": trade.size,
             "pnl": trade.pnl,
             "equity_after": trade.equity_after,
         }
@@ -385,6 +478,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lvns", type=Path, required=True, help="CSV of LVNs exported by export_month_structures_fast")
     parser.add_argument("--spread", type=float, default=0.02, help="Spread adjustment applied to LVN entry price")
     parser.add_argument("--starting-equity", type=float, default=10_000.0, help="Starting equity for cumulative PnL")
+    parser.add_argument("--risk-pct", type=float, default=DEFAULT_RISK_PCT, help="Risk percentage per trade")
     parser.add_argument("--trades-csv", type=Path, help="Optional path to write trade results")
     parser.add_argument("--trades-html", type=Path, help="Optional path to write trade table as HTML")
     parser.add_argument("--chart-html", type=Path, help="Optional path to write price & equity chart")
@@ -400,21 +494,28 @@ def main() -> None:
     legs = pd.read_csv(args.legs)
     lvns = pd.read_csv(args.lvns)
 
-    trades, final_equity = run_backtest(
+    trades, final_equity, geometry_debug = run_backtest(
         prices,
         swings,
         legs,
         lvns,
         spread=args.spread,
         starting_equity=args.starting_equity,
+        risk_pct=args.risk_pct,
     )
 
     trades_df = trades_to_dataframe(trades)
     print(f"Generated {len(trades_df)} trades; final equity = {final_equity:.2f}")
+    if geometry_debug:
+        print(f"Geometry issues recorded: {len(geometry_debug)}")
     if args.trades_csv:
         args.trades_csv.parent.mkdir(parents=True, exist_ok=True)
         trades_df.to_csv(args.trades_csv, index=False)
         print(f"Trades written -> {args.trades_csv}")
+        if geometry_debug:
+            debug_path = args.trades_csv.parent / "geometry_debug.csv"
+            pd.DataFrame(geometry_debug).to_csv(debug_path, index=False)
+            print(f"Geometry debug written -> {debug_path}")
 
     if args.trades_html:
         args.trades_html.parent.mkdir(parents=True, exist_ok=True)

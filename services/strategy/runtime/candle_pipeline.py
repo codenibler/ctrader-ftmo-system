@@ -1,6 +1,7 @@
 """Processing pipeline wiring candles to indicators and order logic."""
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
@@ -18,20 +19,34 @@ from ..indicators import (
     legs_to_frame,
     update_emas,
 )
-from ..risk import contract_value_from_price
+from ..risk import (
+    DEFAULT_CONTRACT_UNITS,
+    DEFAULT_RISK_PCT,
+    compute_position_size,
+    contract_value_from_price,
+)
 from .orders import PendingOrder
 from .strategy_state import Candle, StrategyState
 
 DEFAULT_TIMEFRAME = "minute"
 DEFAULT_SPREAD = 0.02
 
+logger = logging.getLogger(__name__)
+
 
 class StrategyPipeline:
     """Stream candles, maintain geometry, and generate trade intents."""
 
-    def __init__(self, state: StrategyState, *, spread: float = DEFAULT_SPREAD) -> None:
+    def __init__(
+        self,
+        state: StrategyState,
+        *,
+        spread: float = DEFAULT_SPREAD,
+        risk_pct: float = DEFAULT_RISK_PCT,
+    ) -> None:
         self.state = state
         self.spread = spread
+        self.risk_pct = risk_pct
         self._known_pivots: Set[pd.Timestamp] = set()
         self._known_leg_keys: Set[Tuple[pd.Timestamp, pd.Timestamp]] = set()
         self._known_lvn_keys: Set[Tuple[pd.Timestamp, pd.Timestamp, float]] = set()
@@ -140,6 +155,30 @@ class StrategyPipeline:
 
     # ------------------------------------------------------------------
     # Order lifecycle
+    def _record_geometry_issue(
+        self,
+        *,
+        stage: str,
+        leg_id: int,
+        direction: str,
+        entry_price: float,
+        stop_price: float,
+        target_price: Optional[float],
+        message: str,
+    ) -> None:
+        event = {
+            "stage": stage,
+            "leg_id": leg_id,
+            "direction": direction,
+            "entry_price": entry_price,
+            "stop_price": stop_price,
+            "target_price": target_price,
+            "message": message,
+            "logged_at": pd.Timestamp.utcnow(),
+        }
+        self.state.record_debug(event)
+        logger.debug("Geometry issue recorded: %s", event)
+
     def _create_order(self, node: LowVolumeNode) -> None:
         leg_key = (pd.Timestamp(node.start_ts), pd.Timestamp(node.end_ts))
         leg = self._leg_index.get(leg_key)
@@ -150,15 +189,38 @@ class StrategyPipeline:
         if direction == "uptrend":
             entry_price = float(node.lvn_price) - spread
             stop_price = float(leg.start_price)
+            if stop_price >= entry_price:
+                self._record_geometry_issue(
+                    stage="order_creation",
+                    leg_id=int(leg.leg_id),
+                    direction=direction,
+                    entry_price=entry_price,
+                    stop_price=stop_price,
+                    target_price=float(leg.end_price),
+                    message="Long entry is at/below stop; skipping order.",
+                )
+                return
         else:
             entry_price = float(node.lvn_price) + spread
             stop_price = float(leg.start_price)
+            if stop_price <= entry_price:
+                self._record_geometry_issue(
+                    stage="order_creation",
+                    leg_id=int(leg.leg_id),
+                    direction=direction,
+                    entry_price=entry_price,
+                    stop_price=stop_price,
+                    target_price=float(leg.end_price),
+                    message="Short entry is at/above stop; skipping order.",
+                )
+                return
         if entry_price <= 0:
             return
         contract_value = contract_value_from_price(entry_price)
         order = PendingOrder(
             order_id=uuid.uuid4().hex,
             leg_key=leg_key,
+            leg_id=int(leg.leg_id),
             direction=direction,
             entry_price=entry_price,
             stop_price=stop_price,
@@ -177,9 +239,21 @@ class StrategyPipeline:
             if order.is_long and candle.low <= order.entry_price:
                 order.status = "filled"
                 order.filled_at = candle.timestamp
+                self._assign_order_size(order)
             elif order.is_short and candle.high >= order.entry_price:
                 order.status = "filled"
                 order.filled_at = candle.timestamp
+                self._assign_order_size(order)
+
+    def _assign_order_size(self, order: PendingOrder) -> None:
+        size = compute_position_size(
+            equity=self.state.equity,
+            entry_price=order.entry_price,
+            stop_price=order.stop_price,
+            risk_pct=self.risk_pct,
+            contract_units=DEFAULT_CONTRACT_UNITS,
+        )
+        order.size = max(size, 0.0)
 
     def _check_stop_hits(self, candle: Candle) -> None:
         for order in list(self.state.orders.values()):
@@ -197,11 +271,41 @@ class StrategyPipeline:
         if structure == "HH":
             for order in list(self.state.orders.values()):
                 if order.status == "filled" and order.is_long:
-                    self._close_order(order, price=pivot_price, time=pivot_time, outcome="target")
+                    if not (order.stop_price < order.entry_price < pivot_price):
+                        self._record_geometry_issue(
+                            stage="target_check",
+                            leg_id=order.leg_id,
+                            direction=order.direction,
+                            entry_price=order.entry_price,
+                            stop_price=order.stop_price,
+                            target_price=pivot_price,
+                            message=(
+                                f"Long target geometry invalid for order {order.order_id}: "
+                                f"stop={order.stop_price:.6f}, entry={order.entry_price:.6f}, "
+                                f"target={pivot_price:.6f}"
+                            ),
+                        )
+                    if pivot_price > order.entry_price:
+                        self._close_order(order, price=pivot_price, time=pivot_time, outcome="target")
         elif structure == "LL":
             for order in list(self.state.orders.values()):
                 if order.status == "filled" and order.is_short:
-                    self._close_order(order, price=pivot_price, time=pivot_time, outcome="target")
+                    if not (order.stop_price > order.entry_price > pivot_price):
+                        self._record_geometry_issue(
+                            stage="target_check",
+                            leg_id=order.leg_id,
+                            direction=order.direction,
+                            entry_price=order.entry_price,
+                            stop_price=order.stop_price,
+                            target_price=pivot_price,
+                            message=(
+                                f"Short target geometry invalid for order {order.order_id}: "
+                                f"stop={order.stop_price:.6f}, entry={order.entry_price:.6f}, "
+                                f"target={pivot_price:.6f}"
+                            ),
+                        )
+                    if pivot_price < order.entry_price:
+                        self._close_order(order, price=pivot_price, time=pivot_time, outcome="target")
 
     def _close_order(self, order: PendingOrder, *, price: float, time: pd.Timestamp, outcome: str) -> None:
         direction_mult = 1.0 if order.is_long else -1.0
@@ -209,7 +313,7 @@ class StrategyPipeline:
             price_change = (price - order.entry_price) / order.entry_price
         else:
             price_change = 0.0
-        pnl = price_change * direction_mult * order.contract_value
+        pnl = price_change * direction_mult * order.contract_value * order.size
         order.status = "closed"
         order.exit_time = time
         order.exit_price = price
@@ -230,12 +334,14 @@ class StrategyPipeline:
                 {
                     "order_id": order.order_id,
                     "direction": order.direction,
+                    "leg_id": order.leg_id,
                     "entry_price": order.entry_price,
                     "entry_time": order.filled_at,
                     "exit_price": order.exit_price,
                     "exit_time": order.exit_time,
                     "outcome": order.outcome,
                     "contract_value": order.contract_value,
+                    "size": order.size,
                     "pnl": order.pnl,
                     "equity_after": order.equity_after,
                     "leg_start": order.leg_key[0],

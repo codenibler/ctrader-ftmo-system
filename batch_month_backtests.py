@@ -21,6 +21,7 @@ from services.strategy.diagnostics.backtest_from_structures import (
     write_trade_chart,
     write_equity_chart,
 )
+from services.strategy.risk import DEFAULT_RISK_PCT
 
 
 def parse_args() -> argparse.Namespace:
@@ -32,6 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-base", type=Path, default=Path("diagnostics"), help="Base directory for outputs")
     parser.add_argument("--spread", type=float, default=0.02, help="Spread adjustment applied to LVN entry price")
     parser.add_argument("--starting-equity", type=float, default=10_000.0, help="Starting equity for PnL accumulation")
+    parser.add_argument("--risk-pct", type=float, default=DEFAULT_RISK_PCT, help="Risk percentage per trade")
     return parser.parse_args()
 
 
@@ -65,6 +67,7 @@ def write_backtest_outputs(
     symbol: str,
     starting_equity: float,
     spread: float,
+    geometry_debug: list[dict[str, object]],
 ) -> None:
     trades_csv = out_dir / "trades_from_structures.csv"
     trades_html = out_dir / "trades_from_structures.html"
@@ -100,6 +103,11 @@ def write_backtest_outputs(
     print(f"  Trades PNG      -> {chart_html.with_suffix('.png')}")
     print(f"  Equity curve    -> {equity_html}")
     print(f"  Equity PNG      -> {equity_html.with_suffix('.png')}")
+    if geometry_debug:
+        debug_df = pd.DataFrame(geometry_debug)
+        debug_csv = out_dir / "geometry_debug.csv"
+        debug_df.to_csv(debug_csv, index=False)
+        print(f"  Geometry debug  -> {debug_csv}")
 
 
 def main() -> None:
@@ -116,13 +124,14 @@ def main() -> None:
         print(f"  Structures saved -> {swings_path}, {legs_path}, {lvns_path}")
 
         prices = load_prices(args.parquet, norm_month)
-        trades, final_equity = run_backtest(
+        trades, final_equity, geometry_debug = run_backtest(
             prices,
             swings_df,
             legs_df,
             lvns_df,
             spread=args.spread,
             starting_equity=args.starting_equity,
+            risk_pct=args.risk_pct,
         )
         trades_df = trades_to_dataframe(trades)
         print(f"  Trades: {len(trades_df)}; final equity = {final_equity:.2f}")
@@ -135,6 +144,7 @@ def main() -> None:
             args.symbol,
             args.starting_equity,
             args.spread,
+            geometry_debug,
         )
 
     print("Done.")
